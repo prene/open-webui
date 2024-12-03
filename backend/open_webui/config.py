@@ -635,8 +635,13 @@ ENABLE_OPENAI_API = PersistentConfig(
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_API_BASE_URL = os.environ.get("OPENAI_API_BASE_URL", "")
 
+# Azure OpenAI Services
+USE_AZURE_OPENAI_ENDPOINT = os.environ.get("USE_AZURE_OPENAI_ENDPOINT", "false").lower() == "true"
+USE_AZURE_OPENAI_ENDPOINT = PersistentConfig(
+    "USE_AZURE_OPENAI_ENDPOINT", "openai.use_azure_openai_endpoint", USE_AZURE_OPENAI_ENDPOINT
+)
 
-if OPENAI_API_BASE_URL == "":
+if OPENAI_API_BASE_URL == "" and not USE_AZURE_OPENAI_ENDPOINT:
     OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 OPENAI_API_KEYS = os.environ.get("OPENAI_API_KEYS", "")
@@ -653,7 +658,7 @@ OPENAI_API_BASE_URLS = (
 )
 
 OPENAI_API_BASE_URLS = [
-    url.strip() if url != "" else "https://api.openai.com/v1"
+    url.strip() if url != "" else ("https://api.openai.com/v1" if not USE_AZURE_OPENAI_ENDPOINT else "")
     for url in OPENAI_API_BASE_URLS.split(";")
 ]
 OPENAI_API_BASE_URLS = PersistentConfig(
@@ -674,7 +679,6 @@ try:
     ]
 except Exception:
     pass
-OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 ####################################
 # WEBUI

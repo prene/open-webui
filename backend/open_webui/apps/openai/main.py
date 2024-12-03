@@ -18,6 +18,7 @@ from open_webui.config import (
     OPENAI_API_BASE_URLS,
     OPENAI_API_KEYS,
     OPENAI_API_CONFIGS,
+    USE_AZURE_OPENAI_ENDPOINT,
     AppConfig,
 )
 from open_webui.env import (
@@ -68,7 +69,7 @@ app.state.config.ENABLE_OPENAI_API = ENABLE_OPENAI_API
 app.state.config.OPENAI_API_BASE_URLS = OPENAI_API_BASE_URLS
 app.state.config.OPENAI_API_KEYS = OPENAI_API_KEYS
 app.state.config.OPENAI_API_CONFIGS = OPENAI_API_CONFIGS
-
+app.state.config.USE_AZURE_OPENAI_ENDPOINT = USE_AZURE_OPENAI_ENDPOINT
 
 @app.get("/config")
 async def get_config(user=Depends(get_admin_user)):
@@ -272,7 +273,23 @@ async def get_all_models_responses() -> list:
 
     tasks = []
     for idx, url in enumerate(app.state.config.OPENAI_API_BASE_URLS):
-        if url not in app.state.config.OPENAI_API_CONFIGS:
+        if app.state.config.USE_AZURE_OPENAI_ENDPOINT:
+            model_name = url.split('/deployments/')[1].split('/')[0]
+            # Statically add the model data for Azure
+            model_list = {
+                "object": "list",
+                "data": [
+                    {
+                        "id": model_name,
+                        "name": model_name,
+                        "owned_by": "azure-openai",
+                        "azure-openai": model_name,
+                        "urlIdx": idx,
+                    }
+                ],
+            }
+            tasks.append(asyncio.ensure_future(asyncio.sleep(0, model_list)))
+        elif url not in app.state.config.OPENAI_API_CONFIGS:
             tasks.append(
                 aiohttp_get(f"{url}/models", app.state.config.OPENAI_API_KEYS[idx])
             )
@@ -324,7 +341,6 @@ async def get_all_models_responses() -> list:
                     model["id"] = f"{prefix_id}.{model['id']}"
 
     log.debug(f"get_all_models:responses() {responses}")
-
     return responses
 
 
@@ -584,71 +600,133 @@ async def generate_chat_completion(
 
     # Convert the modified body back to JSON
     payload = json.dumps(payload)
+    
+    if not app.state.config.USE_AZURE_OPENAI_ENDPOINT:
+        headers = {}
+        headers["Authorization"] = f"Bearer {key}"
+        headers["Content-Type"] = "application/json"
+        if "openrouter.ai" in app.state.config.OPENAI_API_BASE_URLS[idx]:
+            headers["HTTP-Referer"] = "https://openwebui.com/"
+            headers["X-Title"] = "Open WebUI"
+        if ENABLE_FORWARD_USER_INFO_HEADERS:
+            headers["X-OpenWebUI-User-Name"] = user.name
+            headers["X-OpenWebUI-User-Id"] = user.id
+            headers["X-OpenWebUI-User-Email"] = user.email
+            headers["X-OpenWebUI-User-Role"] = user.role
 
-    headers = {}
-    headers["Authorization"] = f"Bearer {key}"
-    headers["Content-Type"] = "application/json"
-    if "openrouter.ai" in app.state.config.OPENAI_API_BASE_URLS[idx]:
-        headers["HTTP-Referer"] = "https://openwebui.com/"
-        headers["X-Title"] = "Open WebUI"
-    if ENABLE_FORWARD_USER_INFO_HEADERS:
-        headers["X-OpenWebUI-User-Name"] = user.name
-        headers["X-OpenWebUI-User-Id"] = user.id
-        headers["X-OpenWebUI-User-Email"] = user.email
-        headers["X-OpenWebUI-User-Role"] = user.role
+        r = None
+        session = None
+        streaming = False
+        response = None
 
-    r = None
-    session = None
-    streaming = False
-    response = None
-
-    try:
-        session = aiohttp.ClientSession(
-            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
-        )
-        r = await session.request(
-            method="POST",
-            url=f"{url}/chat/completions",
-            data=payload,
-            headers=headers,
-        )
-
-        # Check if response is SSE
-        if "text/event-stream" in r.headers.get("Content-Type", ""):
-            streaming = True
-            return StreamingResponse(
-                r.content,
-                status_code=r.status,
-                headers=dict(r.headers),
-                background=BackgroundTask(
-                    cleanup_response, response=r, session=session
-                ),
+        try:
+            session = aiohttp.ClientSession(
+                trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
             )
-        else:
-            try:
-                response = await r.json()
-            except Exception as e:
-                log.error(e)
-                response = await r.text()
+            r = await session.request(
+                method="POST",
+                url=f"{url}/chat/completions",
+                data=payload,
+                headers=headers,
+            )
 
-            r.raise_for_status()
-            return response
-    except Exception as e:
-        log.exception(e)
-        error_detail = "Open WebUI: Server Connection Error"
-        if isinstance(response, dict):
-            if "error" in response:
-                error_detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
-        elif isinstance(response, str):
-            error_detail = response
+            # Check if response is SSE
+            if "text/event-stream" in r.headers.get("Content-Type", ""):
+                streaming = True
+                return StreamingResponse(
+                    r.content,
+                    status_code=r.status,
+                    headers=dict(r.headers),
+                    background=BackgroundTask(
+                        cleanup_response, response=r, session=session
+                    ),
+                )
+            else:
+                try:
+                    response = await r.json()
+                except Exception as e:
+                    log.error(e)
+                    response = await r.text()
 
-        raise HTTPException(status_code=r.status if r else 500, detail=error_detail)
-    finally:
-        if not streaming and session:
-            if r:
-                r.close()
-            await session.close()
+                r.raise_for_status()
+                return response
+        except Exception as e:
+            log.exception(e)
+            error_detail = "Open WebUI: Server Connection Error"
+            if isinstance(response, dict):
+                if "error" in response:
+                    error_detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
+            elif isinstance(response, str):
+                error_detail = response
+            raise HTTPException(status_code=r.status if r else 500, detail=error_detail)
+        finally:
+            if not streaming and session:
+                if r:
+                    r.close()
+                await session.close()
+    else:
+        headers = {}
+        headers["Content-Type"] = "application/json"
+        headers["api-key"] = key
+        if "openrouter.ai" in app.state.config.OPENAI_API_BASE_URLS[idx]:
+            headers["HTTP-Referer"] = "https://openwebui.com/"
+            headers["X-Title"] = "Open WebUI"
+        if ENABLE_FORWARD_USER_INFO_HEADERS:
+            headers["X-OpenWebUI-User-Name"] = user.name
+            headers["X-OpenWebUI-User-Id"] = user.id
+            headers["X-OpenWebUI-User-Email"] = user.email
+            headers["X-OpenWebUI-User-Role"] = user.role
 
+        r = None
+        session = None
+        streaming = False
+        response = None
+
+        try:
+            session = aiohttp.ClientSession(
+                trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+            )
+            r = await session.request(
+                method="POST",
+                url=f"{url}",
+                data=payload,
+                headers=headers,
+            )
+
+            # Check if response is SSE
+            if "text/event-stream" in r.headers.get("Content-Type", ""):
+                streaming = True
+                return StreamingResponse(
+                    r.content,
+                    status_code=r.status,
+                    headers=dict(r.headers),
+                    background=BackgroundTask(
+                        cleanup_response, response=r, session=session
+                    ),
+                )
+            else:
+                try:
+                    response = await r.json()
+                except Exception as e:
+                    log.error(e)
+                    response = await r.text()
+
+                r.raise_for_status()
+                return response
+        except Exception as e:
+            log.exception(e)
+            error_detail = "Open WebUI: Server Connection Error"
+            if isinstance(response, dict):
+                if "error" in response:
+                    error_detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
+            elif isinstance(response, str):
+                error_detail = response
+            raise HTTPException(status_code=r.status if r else 500, detail=error_detail)
+        finally:
+            if not streaming and session:
+                if r:
+                    r.close()
+                await session.close()
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
