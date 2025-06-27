@@ -680,6 +680,19 @@ def apply_params_to_form_data(form_data, model):
         "system": str,
     }
 
+    # Preserve OpenWebUI-specific params before deletion
+    preserved_open_webui_params = {}
+    for key in open_webui_params:
+        if key in params and params[key] is not None:
+            preserved_open_webui_params[key] = params[key]
+            log.debug(f"🔧 Preserved OpenWebUI param: {key}={params[key]}")
+    
+    if preserved_open_webui_params:
+        log.debug(f"📋 Total preserved OpenWebUI params: {preserved_open_webui_params}")
+    else:
+        log.debug("📋 No OpenWebUI params to preserve")
+
+    # Remove OpenWebUI-specific params from regular params
     for key in list(params.keys()):
         if key in open_webui_params:
             del params[key]
@@ -715,7 +728,7 @@ def apply_params_to_form_data(form_data, model):
             except Exception as e:
                 log.exception(f"Error parsing logit_bias: {e}")
 
-    return form_data
+    return form_data, preserved_open_webui_params
 
 
 async def process_chat_payload(request, form_data, user, metadata, model):
@@ -723,8 +736,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
 
-    form_data = apply_params_to_form_data(form_data, model)
+    form_data, preserved_open_webui_params = apply_params_to_form_data(form_data, model)
     log.debug(f"form_data: {form_data}")
+    log.debug(f"preserved_open_webui_params: {preserved_open_webui_params}")
 
     event_emitter = get_event_emitter(metadata)
     event_call = get_event_call(metadata)
@@ -864,8 +878,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         **metadata,
         "tool_ids": tool_ids,
         "files": files,
+        **preserved_open_webui_params,  # Add preserved OpenWebUI params to metadata
     }
     form_data["metadata"] = metadata
+    
+    # Debug logging for function_calling parameter
+    if "function_calling" in preserved_open_webui_params:
+        log.debug(f"✅ function_calling='{preserved_open_webui_params['function_calling']}' preserved in metadata for model {model.get('id', 'unknown')}")
 
     # Server side tools
     tool_ids = metadata.get("tool_ids", None)
@@ -2476,3 +2495,4 @@ async def process_chat_response(
             headers=dict(response.headers),
             background=response.background,
         )
+    
