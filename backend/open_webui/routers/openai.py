@@ -725,7 +725,9 @@ async def generate_chat_completion(
             payload["model"] = model_info.base_model_id
             model_id = model_info.base_model_id
 
-        params = model_info.params.model_dump()
+        # Use inheritance-aware parameter fetching
+        from open_webui.utils.models import get_effective_model_params
+        params = get_effective_model_params(model_info)
 
         if params:
             system = params.pop("system", None)

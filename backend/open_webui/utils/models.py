@@ -320,3 +320,60 @@ def check_model_access(user, model):
             )
         ):
             raise Exception("Model not found")
+
+
+def inherit_base_model_params(custom_model_params: dict, base_model_params: dict) -> dict:
+    """
+    Merges base model parameters with custom model parameters.
+    Custom model parameters take precedence over base model parameters.
+    Only inherits base model params where custom model params are None/missing.
+    
+    Args:
+        custom_model_params: Parameters from the custom model
+        base_model_params: Parameters from the base model
+        
+    Returns:
+        dict: Merged parameters with custom taking precedence
+    """
+    # Start with base model parameters
+    inherited_params = base_model_params.copy()
+    
+    # Override with custom model parameters, but only for non-null values
+    for key, value in custom_model_params.items():
+        if value is not None:
+            inherited_params[key] = value
+    
+    return inherited_params
+
+
+def get_effective_model_params(model_info) -> dict:
+    """
+    Gets the effective parameters for a model, including base model inheritance.
+    
+    Args:
+        model_info: The custom model information
+        
+    Returns:
+        dict: Effective parameters after inheritance
+    """
+    custom_params = model_info.params.model_dump()
+    
+    # If no base model, just return custom params
+    if not model_info.base_model_id:
+        return custom_params
+    
+    # Get base model info and parameters
+    base_model_info = Models.get_model_by_id(model_info.base_model_id)
+    if not base_model_info:
+        # Base model not found, fallback to custom params only
+        log.warning(f"Base model {model_info.base_model_id} not found for model {model_info.id}")
+        return custom_params
+    
+    base_params = base_model_info.params.model_dump()
+    
+    # Merge with inheritance
+    inherited_params = inherit_base_model_params(custom_params, base_params)
+    
+    log.debug(f"Model {model_info.id} inherited params from {model_info.base_model_id}: {inherited_params}")
+    
+    return inherited_params

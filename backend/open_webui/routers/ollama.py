@@ -1297,7 +1297,9 @@ async def generate_chat_completion(
         if model_info.base_model_id:
             payload["model"] = model_info.base_model_id
 
-        params = model_info.params.model_dump()
+        # Use inheritance-aware parameter fetching
+        from open_webui.utils.models import get_effective_model_params
+        params = get_effective_model_params(model_info)
 
         if params:
             system = params.pop("system", None)
@@ -1403,7 +1405,10 @@ async def generate_openai_completion(
     if model_info:
         if model_info.base_model_id:
             payload["model"] = model_info.base_model_id
-        params = model_info.params.model_dump()
+        
+        # Use inheritance-aware parameter fetching
+        from open_webui.utils.models import get_effective_model_params
+        params = get_effective_model_params(model_info)
 
         if params:
             payload = apply_model_params_to_body_openai(params, payload)
@@ -1482,7 +1487,9 @@ async def generate_openai_chat_completion(
         if model_info.base_model_id:
             payload["model"] = model_info.base_model_id
 
-        params = model_info.params.model_dump()
+        # Use inheritance-aware parameter fetching
+        from open_webui.utils.models import get_effective_model_params
+        params = get_effective_model_params(model_info)
 
         if params:
             system = params.pop("system", None)
